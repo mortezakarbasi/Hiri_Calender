@@ -1,0 +1,352 @@
+#!/usr/bin/env python3
+
+import sys
+import tkinter as tk
+from tkinter import simpledialog, messagebox, ttk  # <-- ttk added here
+import json
+import os
+
+try:
+    import jdatetime
+except ImportError:
+    root = tk.Tk()
+    root.withdraw()
+    messagebox.showerror(
+        "Missing Dependency",
+        "The 'jdatetime' module is not installed.\n\nPlease install it using:\n\npip install jdatetime"
+    )
+    sys.exit(1)
+
+# Constants
+EVENTS_FILE = "events.json"
+SETTINGS_FILE = "settings.json"
+events = {}
+
+def load_events():
+    global events
+    if os.path.exists(EVENTS_FILE):
+        with open(EVENTS_FILE, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+            events = {tuple(map(int, k.split("-"))): v for k, v in raw.items()}
+
+def save_events():
+    with open(EVENTS_FILE, "w", encoding="utf-8") as f:
+        json.dump({"-".join(map(str, k)): v for k, v in events.items()}, f, indent=2, ensure_ascii=False)
+
+def load_settings():
+    if os.path.exists(SETTINGS_FILE):
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data.get("last_year"), data.get("last_month")
+    return None, None
+
+def save_settings(year, month):
+    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+        json.dump({"last_year": year, "last_month": month}, f)
+
+# Color gradient based on number of events
+def get_event_color(event_count):
+    shades = [
+        "#cce5ff", "#99ccff", "#66b3ff", "#3399ff", "#1a8cff",
+        "#0073e6", "#0059b3", "#004080", "#00264d", "#001a33"
+    ]
+    index = min(event_count, 10) - 1
+    return shades[index] if event_count > 0 else None
+
+today_jdate = jdatetime.date.today()
+
+def add_event(year, month, day):
+    key = (year, month, day)
+    event = simpledialog.askstring("Add Event", f"Enter event for {day}/{month}/{year}:")
+    if event:
+        events.setdefault(key, []).append(event)
+        save_events()
+        messagebox.showinfo("Success", "Event added.")
+        set_calendar()
+
+def view_events(year, month, day):
+    key = (year, month, day)
+    day_events = events.get(key, [])
+    if day_events:
+        msg = "\n".join(f"- {e}" for e in day_events)
+        messagebox.showinfo(f"Events for {day}/{month}/{year}", msg)
+    else:
+        messagebox.showinfo("No Events", f"No events for {day}/{month}/{year}.")
+
+def edit_events(year, month, day):
+    key = (year, month, day)
+    day_events = events.get(key, [])
+    if not day_events:
+        messagebox.showinfo("No Events", "No events to edit.")
+        return
+
+    list_text = "\n".join(f"{i+1}: {e}" for i, e in enumerate(day_events))
+    selected = simpledialog.askinteger("Edit/Delete Event", f"Select event index to edit/delete:\n{list_text}")
+    if selected is None or not (1 <= selected <= len(day_events)):
+        return
+
+    idx = selected - 1
+    choice = messagebox.askyesno("Action", "Delete event?\n(Click 'No' to edit)")
+
+    if choice:  # Delete
+        deleted = day_events.pop(idx)
+        messagebox.showinfo("Deleted", f"Deleted: {deleted}")
+    else:  # Edit
+        new_text = simpledialog.askstring("Edit Event", "Edit event:", initialvalue=day_events[idx])
+        if new_text:
+            day_events[idx] = new_text
+    save_events()
+    set_calendar()
+
+def on_day_click(year, month, day):
+    key = (year, month, day)
+    miladi = jdatetime.date(year, month, day).togregorian()
+    info = f"{day}/{month}/{year} (Shamsi)\n{miladi.strftime('%Y-%m-%d')} (Miladi)"
+
+    day_events = events.get(key, [])
+    if not day_events:
+        if messagebox.askyesno("Add or View", f"{info}\n\nAdd event?"):
+            add_event(year, month, day)
+        else:
+            messagebox.showinfo("No Events", "No events found.")
+        return
+
+    action = messagebox.askyesnocancel(
+        "Event Options",
+        f"{info}\n\nSelect an action:\n"
+        "- YES: Add new event\n"
+        "- NO: Edit/Delete existing event\n"
+        "- CANCEL: Just view"
+    )
+    if action is True:
+        add_event(year, month, day)
+    elif action is False:
+        edit_events(year, month, day)
+    else:
+        view_events(year, month, day)
+
+def is_leap_year(year):
+    try:
+        jdatetime.date(year, 12, 30)
+        return True
+    except ValueError:
+        return False
+
+def get_days_in_month(year, month):
+    return 31 if month <= 6 else 30 if month <= 11 else (30 if is_leap_year(year) else 29)
+
+def add_tooltip(widget, text):
+    def on_enter(e):
+        widget.tooltip = tk.Toplevel(widget)
+        widget.tooltip.wm_overrideredirect(True)
+        x = widget.winfo_rootx() + 50
+        y = widget.winfo_rooty() + 10
+        widget.tooltip.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(widget.tooltip, text=text, justify='left', background='lightyellow',
+                         relief='solid', borderwidth=1, font=("Arial", 9))
+        label.pack(ipadx=1)
+
+    def on_leave(e):
+        if hasattr(widget, 'tooltip'):
+            widget.tooltip.destroy()
+            del widget.tooltip
+
+    widget.bind("<Enter>", on_enter)
+    widget.bind("<Leave>", on_leave)
+
+def show_calendar(year, month):
+    for widget in calendar_frame.winfo_children():
+        widget.destroy()
+
+    month_name = jdatetime.date(year, month, 1).strftime('%B')
+    tk.Label(calendar_frame, text=f"{month_name} {year}", font=("Arial", 16), bg=theme["calendar_bg"]).grid(row=0, column=0, columnspan=7)
+
+    weekdays = ['Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri']
+    for i, name in enumerate(weekdays):
+        tk.Label(calendar_frame, text=name, font=("Arial", 10, "bold"), bg=theme["calendar_bg"]).grid(row=1, column=i)
+
+    first_weekday = (jdatetime.date(year, month, 1).togregorian().weekday() + 2) % 7
+    row, col = 2, first_weekday
+
+    for day in range(1, get_days_in_month(year, month) + 1):
+        key = (year, month, day)
+        miladi_str = jdatetime.date(year, month, day).togregorian().strftime('%m/%d')
+        is_today = (year, month, day) == (today_jdate.year, today_jdate.month, today_jdate.day)
+        event_count = len(events.get(key, []))
+        bg_color = 'red' if is_today else get_event_color(event_count)
+        fg_color = 'white' if is_today else None
+        btn = tk.Button(calendar_frame, text=f"{day}\n({miladi_str})", width=6, bg=bg_color, fg=fg_color,
+                        command=lambda d=day: on_day_click(year, month, d))
+        btn.grid(row=row, column=col, padx=2, pady=2)
+        add_tooltip(btn, "\n".join(events.get(key, [])) or "No events")
+        col += 1
+        if col > 6:
+            col, row = 0, row + 1
+
+def show_full_year_calendar(year):
+    for widget in calendar_frame.winfo_children():
+        widget.destroy()
+
+    canvas = tk.Canvas(calendar_frame, highlightthickness=0, bg=theme["calendar_bg"])
+    scrollbar = tk.Scrollbar(calendar_frame, orient="vertical", command=canvas.yview)
+    scrollable_frame = tk.Frame(canvas, bg=theme["calendar_bg"])
+
+    scrollable_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+    canvas.create_window((0, 0), window=scrollable_frame, anchor="n")
+    canvas.configure(yscrollcommand=scrollbar.set)
+
+    canvas.pack(side="left", fill="both", expand=True)
+    scrollbar.pack(side="right", fill="y")
+
+    for m in range(1, 13):
+        frame = tk.LabelFrame(scrollable_frame, text=jdatetime.date(year, m, 1).strftime('%B'),
+                              padx=5, pady=5,
+                              bg=theme["calendar_bg"],
+                              fg=theme["label_fg"],
+                              font=("Arial", 10))
+        frame.grid(row=(m - 1) // 3, column=(m - 1) % 3, padx=5, pady=5, sticky="n")
+
+        for i, name in enumerate(['S', 'S', 'M', 'T', 'W', 'T', 'F']):
+            tk.Label(frame, text=name, font=("Arial", 8, "bold"),
+                     width=3, bg=theme["calendar_bg"], fg=theme["label_fg"]).grid(row=0, column=i)
+
+        first_weekday = (jdatetime.date(year, m, 1).togregorian().weekday() + 2) % 7
+        r, c = 1, first_weekday
+
+        for day in range(1, get_days_in_month(year, m) + 1):
+            key = (year, m, day)
+            miladi_day = jdatetime.date(year, m, day).togregorian().strftime('%d')
+            label = f"{day}\n({miladi_day})"
+            is_today = (year, m, day) == (today_jdate.year, today_jdate.month, today_jdate.day)
+            event_count = len(events.get(key, []))
+            bg_color = 'red' if is_today else get_event_color(event_count)
+            fg_color = 'white' if is_today else None
+            btn = tk.Button(frame, text=label, width=4, bg=bg_color, fg=fg_color,
+                            command=lambda y=year, mo=m, d=day: on_day_click(y, mo, d))
+            btn.grid(row=r, column=c)
+            add_tooltip(btn, "\n".join(events.get(key, [])) or "No events")
+            c += 1
+            if c > 6:
+                c, r = 0, r + 1
+
+def change_month(delta):
+    try:
+        y = int(year_entry.get())
+        m = int(month_entry.get()) + delta
+        if m < 1:
+            m = 12
+            y -= 1
+        elif m > 12:
+            m = 1
+            y += 1
+        year_entry.delete(0, tk.END)
+        year_entry.insert(0, str(y))
+        month_entry.delete(0, tk.END)
+        month_entry.insert(0, str(m))
+        set_calendar()
+        save_settings(y, m)
+    except ValueError:
+        pass
+
+def set_calendar():
+    try:
+        y, m = int(year_entry.get()), int(month_entry.get())
+        save_settings(y, m)
+        if view_mode.get() == "year":
+            show_full_year_calendar(y)
+        else:
+            show_calendar(y, m)
+    except ValueError:
+        messagebox.showerror("Error", "Please enter valid numbers.")
+
+def toggle_dark_mode():
+    global theme
+    current_mode = dark_mode_var.get()
+    theme = dark_theme if current_mode else light_theme
+    style.theme_use("clam" if current_mode else "default")
+    root.config(bg=theme["root_bg"])
+    top_frame.config(bg=theme["top_bg"])
+    calendar_frame.config(bg=theme["calendar_bg"])
+    for widget in root.winfo_children():
+        try:
+            widget.config(bg=theme["top_bg"], fg=theme["label_fg"])
+        except:
+            pass
+
+# GUI Setup
+root = tk.Tk()
+root.title("Shamsi Calendar")
+root.geometry("1000x700")
+
+# Themes
+light_theme = {
+    "root_bg": "#f0f0f0",
+    "top_bg": "#ffffff",
+    "calendar_bg": "#f9f9f9",
+    "button_bg": "#dddddd",
+    "button_fg": "black",
+    "entry_bg": "white",
+    "entry_fg": "black",
+    "label_bg": "#f0f0f0",
+    "label_fg": "black"
+}
+
+dark_theme = {
+    "root_bg": "#2e2e2e",
+    "top_bg": "#3c3f41",
+    "calendar_bg": "#2e2e2e",
+    "button_bg": "#4d4d4d",
+    "button_fg": "white",
+    "entry_bg": "#4d4d4d",
+    "entry_fg": "white",
+    "label_bg": "#3c3f41",
+    "label_fg": "white"
+}
+
+theme = light_theme
+
+style = ttk.Style()
+dark_mode_var = tk.BooleanVar(value=False)
+
+container = tk.Frame(root)
+container.pack(expand=True, fill="both")
+
+calendar_frame = tk.Frame(container, bg=theme["calendar_bg"])
+calendar_frame.pack(expand=True, fill="both")
+
+top_frame = tk.Frame(container, bg=theme["top_bg"])
+top_frame.pack(pady=10)
+
+tk.Label(top_frame, text="Year:", bg=theme["top_bg"], fg=theme["label_fg"]).pack(side=tk.LEFT)
+year_entry = tk.Entry(top_frame, width=6, bg=theme["entry_bg"], fg=theme["entry_fg"], insertbackground="white")
+year_entry.pack(side=tk.LEFT)
+
+tk.Label(top_frame, text="Month:", bg=theme["top_bg"], fg=theme["label_fg"]).pack(side=tk.LEFT)
+month_entry = tk.Entry(top_frame, width=4, bg=theme["entry_bg"], fg=theme["entry_fg"], insertbackground="white")
+month_entry.pack(side=tk.LEFT)
+
+view_mode = tk.StringVar(value="month")
+tk.Radiobutton(top_frame, text="Single Month", variable=view_mode, value="month",
+               bg=theme["top_bg"], fg=theme["label_fg"], selectcolor=theme["calendar_bg"]).pack(side=tk.LEFT, padx=10)
+tk.Radiobutton(top_frame, text="Full Year", variable=view_mode, value="year",
+               bg=theme["top_bg"], fg=theme["label_fg"], selectcolor=theme["calendar_bg"]).pack(side=tk.LEFT)
+
+tk.Button(top_frame, text="Show Calendar", command=set_calendar, bg=theme["button_bg"], fg=theme["button_fg"]).pack(side=tk.LEFT, padx=10)
+tk.Checkbutton(top_frame, text="Dark Mode", variable=dark_mode_var, command=toggle_dark_mode,
+               bg=theme["top_bg"], fg=theme["label_fg"], selectcolor=theme["calendar_bg"], activebackground=theme["top_bg"], activeforeground=theme["label_fg"]).pack(side=tk.LEFT, padx=10)
+
+load_events()
+last_year, last_month = load_settings()
+if last_year and last_month:
+    year_entry.insert(0, str(last_year))
+    month_entry.insert(0, str(last_month))
+else:
+    year_entry.insert(0, str(today_jdate.year))
+    month_entry.insert(0, str(today_jdate.month))
+
+set_calendar()
+
+root.bind("<Left>", lambda e: change_month(-1))
+root.bind("<Right>", lambda e: change_month(1))
+
+root.mainloop()
