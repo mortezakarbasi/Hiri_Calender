@@ -1,2 +1,2 @@
 # Hiri_Calender
-This Calendar is made with AI model like GPT and QWEN
+This Calendar is made with AI model like GPT and QWEN and GROK
